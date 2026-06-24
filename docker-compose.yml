@@ -1,0 +1,32 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    container_name: qwen_vllm
+    ports:
+      - "8000:8000"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      TRANSFORMERS_CACHE: /root/.cache/huggingface
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    gpus: all
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: cropdoctor_streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      VLLM_HOST: http://vllm:8000
+      VLLM_MODEL: Qwen/Qwen3-VL-2B-Instruct
+    depends_on:
+      - vllm
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
