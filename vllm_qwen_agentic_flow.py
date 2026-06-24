@@ -158,29 +158,39 @@ class AgriInferenceEngine:
             scale = max_side / max(w, h)
             image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
-        image.convert("RGB").save(buf, format="PNG")
+        image.convert("RGB").save(buf, format="JPEG", quality=85)
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
     def _infer(self, image_b64: str, user_text: str, max_new_tokens: int) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
-                    },
-                    {
-                        "type": "text",
-                        "text": user_text,
-                    },
-                ],
-            }],
-            max_tokens=max_new_tokens,
-            temperature=0,
-        )
-        return response.choices[0].message.content.strip()
+        max_retries = 3
+        backoff = 1.0
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                            },
+                            {
+                                "type": "text",
+                                "text": user_text,
+                            },
+                        ],
+                    }],
+                    max_tokens=max_new_tokens,
+                    temperature=0,
+                )
+                return response.choices[0].message.content.strip()
+            except Exception as e:
+                print(f"[AgriInferenceEngine] VLM inference attempt {attempt + 1} failed: {e}")
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(backoff)
+                backoff *= 2.0
 
     def _safe_bbox(self, bbox: List[int]) -> List[int]:
         if bbox == [250, 250, 750, 750] or bbox == [0, 0, 0, 0]:
@@ -188,71 +198,77 @@ class AgriInferenceEngine:
         return [max(0, min(1000, v)) for v in bbox]
 
     def classify_crop(self, image: Image.Image, crops: List[str]) -> Dict:
-        image_b64 = self._to_base64(image, max_side=448)
-        prompt = (
-            f"{SYSTEM}\nTask: What crop is in this image?\n"
-            f"Valid: {', '.join(crops)}\n"
-            f"Schema: {self.crop_parser.get_format_instructions()}"
-        )
-        raw = self._infer(image_b64, prompt, max_new_tokens=25)
-        try:    return self.crop_parser.parse(raw)
-        except: return {"crop": "unknown"}
+        try:
+            image_b64 = self._to_base64(image, max_side=448)
+            prompt = (
+                f"{SYSTEM}\nTask: What crop is in this image?\n"
+                f"Valid: {', '.join(crops)}\n"
+                f"Schema: {self.crop_parser.get_format_instructions()}"
+            )
+            raw = self._infer(image_b64, prompt, max_new_tokens=25)
+            return self.crop_parser.parse(raw)
+        except Exception as e:
+            print(f"[AgriInferenceEngine] classify_crop failed: {e}")
+            return {"crop": "unknown"}
 
     def detect_pest(self, image: Image.Image, crop: str, pests: List[str]) -> Dict:
-        image_b64 = self._to_base64(image, max_side=1120)
-        prompt = (
-            f"{SYSTEM}\n"
-            f"Task: Detect a LIVE INSECT on this {crop} plant.\n"
-            f"Step 1 — Scan the entire image every inch carefully for any small dot like pests/insects, visula insect body, legs, or wings.\n"
-            f"Step 2 — If found, note which quadrant it is in (top-left/top-right/bottom-left/bottom-right).\n"
-            f"Step 3 — Output a tight bbox around the insect only.\n"
-            f"Valid pests: {', '.join(pests)} select strictly from these pests only.\n"
-            f"Schema: {self.pest_parser.get_format_instructions()}" 
-        )
-        raw = self._infer(image_b64, prompt, max_new_tokens=80)
         try:
+            image_b64 = self._to_base64(image, max_side=1120)
+            prompt = (
+                f"{SYSTEM}\n"
+                f"Task: Detect a LIVE INSECT on this {crop} plant.\n"
+                f"Step 1 — Scan the entire image every inch carefully for any small dot like pests/insects, visula insect body, legs, or wings.\n"
+                f"Step 2 — If found, note which quadrant it is in (top-left/top-right/bottom-left/bottom-right).\n"
+                f"Step 3 — Output a tight bbox around the insect only.\n"
+                f"Valid pests: {', '.join(pests)} select strictly from these pests only.\n"
+                f"Schema: {self.pest_parser.get_format_instructions()}" 
+            )
+            raw = self._infer(image_b64, prompt, max_new_tokens=80)
             res = self.pest_parser.parse(raw)
             res["bbox"] = self._safe_bbox(res["bbox"])
             return res
-        except:
+        except Exception as e:
+            print(f"[AgriInferenceEngine] detect_pest failed: {e}")
             return {"name":"none","type":"pest","present":False,"confidence":0.0,"bbox":[0,0,0,0]}
 
     def detect_symptom(self, image: Image.Image, crop: str, pests: List[str]) -> Dict:
-        image_b64 = self._to_base64(image, max_side=1120)
-        prompt = (
-            f"{SYSTEM}\n"
-            f"Task: Detect PEST DAMAGE on this {crop} plant (holes, bite marks, rolled leaves, entry holes).\n"
-            f"Step 1 — Look for irregular holes, torn edges, or frass deposits, color changes.\n"
-            f"Step 2 — Note which part of the image the damage appears in.\n"
-            f"Step 3 — Output a tight bbox around the most prominent damaged area only.\n"
-            f"Valid pests causing damage: {', '.join(pests)} select strictly from these pests only.\n"
-            f"Schema: {self.symptom_parser.get_format_instructions()}"
-        )
-        raw = self._infer(image_b64, prompt, max_new_tokens=80)
         try:
+            image_b64 = self._to_base64(image, max_side=1120)
+            prompt = (
+                f"{SYSTEM}\n"
+                f"Task: Detect PEST DAMAGE on this {crop} plant (holes, bite marks, rolled leaves, entry holes).\n"
+                f"Step 1 — Look for irregular holes, torn edges, or frass deposits, color changes.\n"
+                f"Step 2 — Note which part of the image the damage appears in.\n"
+                f"Step 3 — Output a tight bbox around the most prominent damaged area only.\n"
+                f"Valid pests causing damage: {', '.join(pests)} select strictly from these pests only.\n"
+                f"Schema: {self.symptom_parser.get_format_instructions()}"
+            )
+            raw = self._infer(image_b64, prompt, max_new_tokens=80)
             res = self.symptom_parser.parse(raw)
             res["bbox"] = self._safe_bbox(res["bbox"])
             return res
-        except:
+        except Exception as e:
+            print(f"[AgriInferenceEngine] detect_symptom failed: {e}")
             return {"name":"none","type":"symptom","present":False,"confidence":0.0,"bbox":[0,0,0,0]}
 
     def detect_disease(self, image: Image.Image, crop: str, diseases: List[str]) -> Dict:
-        image_b64 = self._to_base64(image, max_side=1120)
-        prompt = (
-            f"{SYSTEM}\n"
-            f"Task: Detect DISEASE on this {crop} plant (lesions, spots, mold, blight, discoloration).\n"
-            f"Step 1 — Scan for abnormal coloration, necrotic spots, or fungal growth.\n"
-            f"Step 2 — Note where the most severe symptom appears in the image.\n"
-            f"Step 3 — Output a tight bbox around that region only.\n"
-            f"Valid diseases: {', '.join(diseases)} select strictly from these diseases only.\n"
-            f"Schema: {self.disease_parser.get_format_instructions()}"
-        )
-        raw = self._infer(image_b64, prompt, max_new_tokens=80)
         try:
+            image_b64 = self._to_base64(image, max_side=1120)
+            prompt = (
+                f"{SYSTEM}\n"
+                f"Task: Detect DISEASE on this {crop} plant (lesions, spots, mold, blight, discoloration).\n"
+                f"Step 1 — Scan for abnormal coloration, necrotic spots, or fungal growth.\n"
+                f"Step 2 — Note where the most severe symptom appears in the image.\n"
+                f"Step 3 — Output a tight bbox around that region only.\n"
+                f"Valid diseases: {', '.join(diseases)} select strictly from these diseases only.\n"
+                f"Schema: {self.disease_parser.get_format_instructions()}"
+            )
+            raw = self._infer(image_b64, prompt, max_new_tokens=80)
             res = self.disease_parser.parse(raw)
             res["bbox"] = self._safe_bbox(res["bbox"])
             return res
-        except:
+        except Exception as e:
+            print(f"[AgriInferenceEngine] detect_disease failed: {e}")
             return {"name":"none","type":"disease","present":False,"confidence":0.0,"bbox":[0,0,0,0]}
 
     def fallback_bbox(self, image: Image.Image, crop: str, category: str, name: str) -> List[Dict]:
