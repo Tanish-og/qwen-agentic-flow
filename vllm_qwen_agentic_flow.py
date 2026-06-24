@@ -134,12 +134,16 @@ SYSTEM = (
     "Be PRECISE — do not default to center [250,250,750,750]."
 )
 
-try:
-    VLLM_HOST  = st.secrets.get("VLLM_HOST", "http://localhost:8000")
-    VLLM_MODEL = st.secrets.get("VLLM_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
-except Exception:
-    VLLM_HOST  = "http://localhost:8000"
-    VLLM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
+import os
+
+def get_config(key: str, default: str) -> str:
+    try:
+        return os.getenv(key) or st.secrets.get(key, default)
+    except Exception:
+        return os.getenv(key, default)
+
+VLLM_HOST = get_config("VLLM_HOST", "http://localhost:8000")
+VLLM_MODEL = get_config("VLLM_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
 
 
 class AgriInferenceEngine:
