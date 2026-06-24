@@ -143,7 +143,11 @@ def get_config(key: str, default: str) -> str:
         return os.getenv(key, default)
 
 VLLM_HOST = get_config("VLLM_HOST", "http://localhost:8000")
-VLLM_MODEL = get_config("VLLM_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
+# VLLM_MODEL = get_config("VLLM_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
+VLLM_MODEL = get_config(
+    "VLLM_MODEL",
+    "/Users/tanishhh/Desktop/QWEN/weights/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/89644892e4d85e24eaac8bacfd4f463576704203"
+)
 
 
 class AgriInferenceEngine:
