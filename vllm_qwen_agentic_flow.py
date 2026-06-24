@@ -134,8 +134,8 @@ SYSTEM = (
     "Be PRECISE — do not default to center [250,250,750,750]."
 )
 
-VLLM_HOST  = "http://localhost:8000"
-VLLM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
+VLLM_HOST  = st.secrets.get("VLLM_HOST", "http://localhost:8000")
+VLLM_MODEL = st.secrets.get("VLLM_MODEL", "Qwen/Qwen3-VL-2B-Instruct")
 
 
 class AgriInferenceEngine:
